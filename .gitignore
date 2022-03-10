@@ -1,0 +1,17 @@
+.vscode
+*.pyc
+ENV/
+
+#PyCharm
+.idea/
+
+Pipfile
+Pipfile.lock
+
+*.egg-info*
+venv/
+.env
+.venv
+build
+test.py
+.DS_store

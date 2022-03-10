@@ -1,0 +1,1 @@
+bigcommerce @ git+https://github.com/aglensmith/bigcommerce-api-python.git@cli-dev#egg=bigcommerce
