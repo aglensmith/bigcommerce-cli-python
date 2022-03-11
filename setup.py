@@ -8,7 +8,7 @@ def read(fname):
 VERSION = '0'
 
 setup(
-    name='bc-cli',
+    name='bigcli',
     version=VERSION,
     entry_points={
         'console_scripts': [

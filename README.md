@@ -15,9 +15,22 @@ pipx install git+https://github.com/aglensmith/bigcommerce-cli-python@main
 
 ## Usage
 
-
 ```bash
+usage: bigcli api [-h] [-i [IDS [IDS ...]]] [-c] [-cne] [-pp] [--PROD]
+                  [-o [OUT]]
+                  ResourceName
 
+positional arguments:
+  ResourceName        An API resource (bigcli -l to see all)
+
+optional arguments:
+  -h, --help          show this help message and exit
+  -i [IDS [IDS ...]]  specify resource IDs for path
+  -c                  prompt for api credentials
+  -cne                prompt for api credentials no tty echo
+  -pp                 pretty print output
+  --PROD              use prod credentials
+  -o [OUT]            outfile path
 ```
 
 ## Contributing
