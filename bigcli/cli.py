@@ -52,6 +52,7 @@ def main():
     fix_parser.add_argument('-c', dest='prompt_for_creds', action='store_true', help=creds_help)
     fix_parser.add_argument('-pp', dest='pretty_print', action='store_true', help=pretty_help)
     fix_parser.add_argument('--PROD', dest='use_production', action='store_true', help=prod_help)
+    fix_parser.add_argument('-o', dest='out', metavar='path', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help=out_help)
     fix_parser.add_argument('task', nargs='?',  choices=Tasks._all())
     fix_parser.set_defaults(func=task)
 
@@ -80,9 +81,8 @@ def api(args, parser):
     output(args, obj)
 
 def task(args, parser):
-    api = init_api_client(args)
-    output(args, Tasks._all()[args.task](api))
-
+    obj = Tasks._all()[args.task](init_api_client(args))
+    output(args, obj)
 # Classes #####################################################################
 class Tasks():
 
@@ -106,6 +106,7 @@ class Tasks():
 
     def clean_category_assignments(args):
         return
+
 
 class Resources():
 
@@ -249,8 +250,9 @@ def output(args, obj):
 def iterall(args, g):
     l = []
     for thing in g:
-        j = thing.__json__()
-        l.append(j)
+        if issubclass(type(thing), ApiResource):
+            thing = thing.__json__()
+        l.append(thing)
     return json.dumps(l)
 
 def get_store_hash(args):
@@ -289,16 +291,9 @@ def init_api_client(args):
     return BigcommerceApi(store_hash=hash, access_token=token, version='latest')
 
 def color(text, option):
-    choices = {
-        "red": '\033[95m',
-        "blue": '\033[94m',
-        "green": '\033[92m',
-        "yellow": '\033[93m',
-        "red": '\033[91m',
-        "bold": '\033[1m',
-        "underline": '\033[4m',
-    }
-    return choices[option]+ text + '\033[0m'
+    return { "red": '\033[95m', "blue": '\033[94m',"green": '\033[92m', 
+    "yellow": '\033[93m', "red": '\033[91m'}[option] + text + '\033[0m'
 
 if __name__ == '__main__':
     main()
+    
