@@ -1,7 +1,7 @@
 import inspect, sys, os, argparse, json, getpass
-from . import bigcommerce
-from .bigcommerce.api import BigcommerceApi
-from .bigcommerce.resources.base import *
+import bigcommerce
+from bigcommerce.api import BigcommerceApi
+from bigcommerce.resources.base import *
 from collections import OrderedDict
 from inspect import isclass
 
