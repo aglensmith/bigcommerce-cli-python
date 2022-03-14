@@ -1,4 +1,4 @@
-import inspect, sys, os, argparse, json, getpass
+import inspect, sys, os, argparse, json, getpass, subprocess
 import bigcommerce
 from bigcommerce.api import BigcommerceApi
 from bigcommerce.resources.base import *
@@ -13,6 +13,21 @@ Author: Austin Smith
 
 # CLI #########################################################################
 def main():
+    parser = get_parser()
+    args = parser.parse_args()
+    print(args)
+    args.func(args, parser)
+    if args.interactive:
+        while True:
+            run(input('\n[bigcli]: '))
+
+def run(args):
+    parser = get_parser()
+    args = parser.parse_args(args.split(' '))
+    args.func(args, parser)
+
+def get_parser():
+
     prog             = 'bigcli'
     desc             = 'A BigCommerce CLI tool'
     epi              = 'See README.md for additional usage instructions'
@@ -32,6 +47,7 @@ def main():
     resources        = Resources.all
     
     parser = argparse.ArgumentParser(prog=prog, description=desc, epilog=epi)
+    parser.add_argument('-I', dest='interactive', action="store_true")
     parser.set_defaults(func=cli)
     
     subparsers = parser.add_subparsers()
@@ -41,23 +57,32 @@ def main():
     api_parser.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
     api_parser.add_argument('-i', dest='ids', metavar='id', nargs='*', default=[], help=ids_help)
     api_parser.add_argument('-c', '--creds', dest='prompt_for_creds', action='store_true', help=creds_help)
-    api_parser.add_argument('-p', '--pretty', dest='pretty_print', action='store_true', help=pretty_help)
+    api_parser.add_argument('-p', '--pretty', dest='pretty_print', action='store_false', help=pretty_help)
     api_parser.add_argument('-o', dest='out', metavar='path', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help=out_help)
     api_parser.add_argument('-in', dest='instream', metavar='path', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help=in_help)
     api_parser.add_argument('-d', dest='data', metavar='json', help=data_help)
+    api_parser.add_argument('-a', dest='attr', metavar='attribute', help=data_help)
+    api_parser.add_argument('-t', choices=['json', 'txt',])
     api_parser.add_argument('-P', '--PROD', dest='use_production', action='store_true', help=prod_help)
     api_parser.set_defaults(func=api)
 
-    fix_parser = subparsers.add_parser('task', aliases=['f'], help=tasks_help)
+    fix_parser = subparsers.add_parser('task', aliases=['t'], help=tasks_help)
     fix_parser.add_argument('-c', dest='prompt_for_creds', action='store_true', help=creds_help)
-    fix_parser.add_argument('-pp', dest='pretty_print', action='store_true', help=pretty_help)
+    fix_parser.add_argument('-pp', dest='pretty_print', action='store_false', help=pretty_help)
     fix_parser.add_argument('--PROD', dest='use_production', action='store_true', help=prod_help)
+    fix_parser.add_argument('-t', choices=['json', 'txt',])
     fix_parser.add_argument('-o', dest='out', metavar='path', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help=out_help)
     fix_parser.add_argument('task', nargs='?',  choices=Tasks._all())
+    fix_parser.add_argument('params', nargs='*')
     fix_parser.set_defaults(func=task)
 
-    args = parser.parse_args()
-    args.func(args, parser)
+    files_parser = subparsers.add_parser('files', aliases=['f'], help=tasks_help)
+    files_parser.add_argument('-d', dest='delete', action='store_true')
+    files_parser.add_argument('-l', dest='list', action='store_true')
+    files_parser.set_defaults(func=files)
+
+    return parser
+
 
 # CLI Default Functions #######################################################
 def cli(args, parser):
@@ -81,21 +106,32 @@ def api(args, parser):
     output(args, obj)
 
 def task(args, parser):
-    obj = Tasks._all()[args.task](init_api_client(args))
+    obj = Tasks._all()[args.task](args, init_api_client(args))
     output(args, obj)
+
+def files(args, parser):
+    if not os.path.exists('/var/tmp/bigcli'):
+        return
+    if args.delete:
+        os.system('rm /var/tmp/bigcli/*')
+    elif args.list:
+        if os.path.exists('/var/tmp/bigcli'):
+            os.system('ls -all /var/tmp/bigcli | grep bigcli')
+    else:
+        os.system('open /var/tmp/bigcli/*')
 # Classes #####################################################################
 class Tasks():
 
     def _all():
         return {k:v for k,v in vars(Tasks).items() if not k.startswith('_')}
 
-    def get_all_category_ids(api):
+    def get_all_category_ids(args, api):
         categories = api.Categories.iterall()
         category_ids = [c.id for c in categories]
         return category_ids
 
-    def get_non_existent_categories(self, api):
-        categories = self.get_all_category_ids(api)
+    def non_existent_categories(args, api):
+        categories = Tasks.get_all_category_ids(api)
         non_existent = []
         products = api.Products.iterall()
         for product in products:
@@ -104,9 +140,37 @@ class Tasks():
                     non_existent.append(catid)
         return non_existent
 
-    def clean_category_assignments(args):
-        return
+    def map(args, api):
+        l = []
+        all = getattr(api, args.params[0]).iterall()
+        return {getattr(i, args.params[1]):getattr(i, args.params[2]) for i in all}
+    
+    def widget_templates(args, api):
+        """gets widget templates and outputs as list of names and uuids"""
+        templates = api.WidgetTemplates.iterall()
+        return {t['uuid']:t['name'] for t in templates}
 
+    def widget_template_html(args, api):
+        """lists widget templates by uuid and name, prompts for uuid, and outputs the template html for the uuid entered"""
+        if len(args.params) < 1:
+            args.pretty_print = True
+            output(args, Tasks.widget_templates(args, api))
+            uuid = input ('\n [bigcli] UUID: ')
+            args.params.append(uuid)
+        template = api.WidgetTemplates.get(args.params[0])
+        return template.template
+
+    def widget_schema(args, api):
+        if len(args.params) < 1:
+            args.pretty_print = True
+            output(args, Tasks.widget_templates(args, api))
+            uuid = input ('\n [bigcli] UUID: ')
+            args.params.append(uuid)
+        template = api.WidgetTemplates.get(args.params[0])
+        return template.schema
+
+    def clean_category_assignments(args, api):
+        return
 
 class Resources():
 
@@ -232,20 +296,22 @@ def confirm(api, resource_str, ids=[]):
             return input("Type '{}': ".format(check)) == check
 
 def output(args, obj):
+    if args.t:
+        path = '/var/tmp/bigcli'
+        if not os.path.exists(path):
+            os.mkdir(path)
+        args.out = open(path + '/' + 'bigcli.json', 'w')
+
     if inspect.isgenerator(obj) or type(obj) is list:
-        args.out.write(iterall(args, obj))
-        return
-    elif args.pretty_print:
-        print('')
-        for key, val in obj.items():
-            if '_connection' not in key:
-                print('- {0}: {1}'.format(key, val))
-        print('')
+        obj = iterall(args, obj)
+        args.out.write(obj)
     elif type(obj) is dict:
-        print(json.dumps(obj))
+        args.out.write(serialized(obj, args.pretty_print))
     elif not inspect.isgenerator(obj) and issubclass(type(obj), ApiResource):
         obj = obj.__json__()
-        args.out.write(json.dumps(obj))
+        args.out.write(serialized(obj))
+    else:
+        print(str(obj))
 
 def iterall(args, g):
     l = []
@@ -253,7 +319,13 @@ def iterall(args, g):
         if issubclass(type(thing), ApiResource):
             thing = thing.__json__()
         l.append(thing)
-    return json.dumps(l)
+    return serialized(l, args.pretty_print)
+
+def serialized(obj, pretty=False):
+    if pretty:
+        return json.dumps(obj, indent=4)
+    else:
+        return json.dumps(obj)
 
 def get_store_hash(args):
     if args.prompt_for_creds:

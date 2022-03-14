@@ -16,6 +16,31 @@ pipx install git+https://github.com/aglensmith/bigcommerce-cli-python@main
 ## Usage
 
 ```bash
+# get products all products and pipe pretty print to vscode
+bigcli a Products -pp | code -
+
+# bigcli t map WidgetTemplates uuid name -pp
+
+# map
+bigcli t map Pages id name -pp
+{
+    "1": "RSS",
+    "3": "Blog",
+    "8": "Contact",
+    "9": "Home"
+}
+
+# get list of widget templates
+bigcli t widget_templates -pp
+
+{
+    "2ff24732-6848-47ba-9a7f-c8b1d444f270": "PayPal Credit Banner - Cart Page (728x90)",
+    "3002bf5b-5eca-4ac2-8f1f-5240c2b74712": "PayPal Credit Banner - Home Page (728x90)",
+    "7c541473-855d-4b62-a7bf-6ef3199f914c": "PayPal Credit Banner - Product Details Page (234x60)",
+}
+```
+
+```bash
 usage: bigcli api [-h] [-i [IDS [IDS ...]]] [-c] [-cne] [-pp] [--PROD]
                   [-o [OUT]]
                   ResourceName
