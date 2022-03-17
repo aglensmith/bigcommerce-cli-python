@@ -2,101 +2,138 @@
 
 A BigCommerce CLI tool written in python. 
 
-Install using [pipx](https://pypa.github.io/pipx/).
+## Installation
+
+Install into isolated python environment using [`pipx`](https://pypa.github.io/pipx/) (recommended).
 
 ```bash
 # install pipx if you don't have it.
 brew install pipx
 pipx ensurepath
-
-# install the cli
 pipx install git+https://github.com/aglensmith/bigcommerce-cli-python@main
+```
+
+Or, install with `pip`.
+
+```bash
+pip install git+https://github.com/aglensmith/bigcommerce-cli-python@main
 ```
 
 ## Usage
 
+If the following environment variables aren't set, you'll get prompted for credentials. Add them them to your terminal startup script (`~/.bash_profile`, `~/.bashrc`, `~/.zshrc`, etc). 
+
+
 ```bash
-# get products all products and pipe pretty print to vscode
-bigcli a Products -pp | code -
+# used by default
+export BIGCLI_STORE_HASH_DEV="dev_hash"
+export BIGCLI_AUTH_TOKEN_DEV="dev_token"
 
-# bigcli t map WidgetTemplates uuid name -pp
+# used when -PROD flag used
+export BIGCLI_STORE_HASH_PROD="prod_hash"
+export BIGCLI_AUTH_TOKEN_PROD="prod_token"
+```
 
-# map
-bigcli t map Pages id name -pp
-{
-    "1": "RSS",
-    "3": "Blog",
-    "8": "Contact",
-    "9": "Home"
-}
+Be sure to reload your startup script after making changes (`source ~/.bash_profile` or equivelant).
 
-# get list of widget templates
-bigcli t widget_templates -pp
+### Examples
 
+```bash
+# list available api resources
+bigcli a -l
+
+# get first page of products
+bigcli a Products
+
+# get products on all pages
+bigcli a Products all
+
+# update a page 
+bigcli a Pages -i 8 -d '{"name": "Pages V3 Test", "type": "page"}'
+
+# update a page from a json file
+bigcli a Pages update -i 8 -in data.json
+
+# output to ~/.bigcli/ as json
+bigcli a Products -o
+
+# output as csv
+bigcli a Products -o csv
+
+# list files in ~/.bigcli/
+bigcli f
+
+# open all files in ~/.bigcli/
+bigcli f -o
+
+# save to a specific directory
+bigcli a Store -o /var/tmp/bigcli.json
+
+# list available tasks
+bigcli t -l
+
+# use task to get list of widget templates
+bigcli t widget_templates
+
+# output
 {
     "2ff24732-6848-47ba-9a7f-c8b1d444f270": "PayPal Credit Banner - Cart Page (728x90)",
     "3002bf5b-5eca-4ac2-8f1f-5240c2b74712": "PayPal Credit Banner - Home Page (728x90)",
     "7c541473-855d-4b62-a7bf-6ef3199f914c": "PayPal Credit Banner - Product Details Page (234x60)",
 }
-```
 
-```bash
-usage: bigcli api [-h] [-i [IDS [IDS ...]]] [-c] [-cne] [-pp] [--PROD]
-                  [-o [OUT]]
-                  ResourceName
+# get a widget template template's schema
+bigcli t widget_template_schema 2ff24732-6848-47ba-9a7f-c8b1d444f270
 
-positional arguments:
-  ResourceName        An API resource (bigcli -l to see all)
+# get a widget template's schema, get prompted for uuid first
+bigcli t widget_template_schema
 
-optional arguments:
-  -h, --help          show this help message and exit
-  -i [IDS [IDS ...]]  specify resource IDs for path
-  -c                  prompt for api credentials
-  -cne                prompt for api credentials no tty echo
-  -pp                 pretty print output
-  --PROD              use prod credentials
-  -o [OUT]            outfile path
+# use map task to print list of page ids mapped to name
+bigcli t map Products id name
+
+# get a list of non-existent categories
+bigcli t non_existent_categories 
 ```
 
 ## Contributing
 
-## Directory structure
+```bash
+# clone repo
+git clone git@github.com:aglensmith/bigcommerce-cli-python.git
 
-```
-.
-├── bin               
-├── docs                 
-├── lib
-    └── bigcommerce-api-python      
-├── 
-├──             
-├── 
-└──         
+# install with pip in editable mode
+pip install -e ./bigcommerce-cli-python/bigcli
+
+# code changes will be reflected when running bigcli in terminal
 ```
 
-## TODO
+### Adding tasks
 
-* Make bigcommerce-api-python a submodule
-    * https://pypa.github.io/pipx/
-    * https://matiascodesal.com/blog/how-use-git-repository-pip-dependency/
-    * https://softwareengineering.stackexchange.com/questions/365579/how-do-i-deal-with-projects-within-projects-in-python
-    * https://stackoverflow.com/questions/37132317/workflow-to-work-on-a-github-fork-of-a-python-library
-    * prevents pip installing cli breaking bigcommerce-api-python previously installled
-    * How to make sure submodules are installed and accessible to cli? 
-* PUT requests
-* POST requests
-* DELETE requests
-* README & Usage examples
-* make channel aware
+Add tasks by adding a function to the `Tasks` class in [bigcli/cli.py](https://github.com/aglensmith/bigcommerce-cli-python/blob/main/bigcli/cli.py).
 
-```
-# Use a branch called "GreetingArg"
-pip install git+https://github.com/matiascodesal/git-for-pip-example.git@GreetingArg#egg=git-for-pip-example
+```python
+class Tasks():
 
-# What that should look like in your requirements.txt
-packageA==1.2.3
--e https://github.com/matiascodesal/git-for-pip-example.git@v1.0.0#egg=my-git-package
-packageB==4.5.6
+    # ...
+
+    def widget_templates(args, api):
+        """
+        list widget templates by [uuid], name
+        Ex: bigcli t widget_templates
+        """
+        templates = api.WidgetTemplates.iterall()
+        return {t['uuid']:t['name'] for t in templates}
 ```
 
-> When you pip install with editable mode, pip only sets up a link from your environment to wherever the source code is. So, you can clone your GitHub fork into a convenient directory like ~/projects/libraryX, then do pip install -e ~/projects/libraryX, and keep editing the code at ~/projects/libraryX while your changes are immediately reflected in the environment where you installed it.
+The function name becomes a CLI argument automatically (ex: `bigcli t widget_templates`).  `bigcli t -l` prints the docstring.
+
+```bash
+widget_templates
+
+        list widget templates by [uuid], name
+        Ex: bigcli t widget_templates
+```
+
+### Adding API resources
+
+`bigcli` uses [a fork of `bigcommerce-api-python`](https://github.com/aglensmith/bigcommerce-api-python/tree/bigcli) to generate the arguments for the `bigcli a` command and to interact with the BigComerce API. Add or edit resources in `bigcommerce/resources/v3` and make a pull request to the `bigcli` branch of [the fork](https://github.com/aglensmith/bigcommerce-api-python/tree/bigcli).
