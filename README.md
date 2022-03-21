@@ -21,20 +21,19 @@ pip install git+https://github.com/aglensmith/bigcommerce-cli-python@main
 
 ## Usage
 
-If the following environment variables aren't set, you'll get prompted for credentials. Add them them to your terminal startup script (`~/.bash_profile`, `~/.bashrc`, `~/.zshrc`, etc). 
-
+`bigcli` will attempt to load API credentials from the `.env` file in the current working directory
 
 ```bash
 # used by default
-export BIGCLI_STORE_HASH_DEV="dev_hash"
-export BIGCLI_AUTH_TOKEN_DEV="dev_token"
+BIGCLI_STORE_HASH_DEV="dev_hash"
+BIGCLI_AUTH_TOKEN_DEV="dev_token"
 
 # used when -PROD flag used
-export BIGCLI_STORE_HASH_PROD="prod_hash"
-export BIGCLI_AUTH_TOKEN_PROD="prod_token"
+BIGCLI_STORE_HASH_PROD="prod_hash"
+BIGCLI_AUTH_TOKEN_PROD="prod_token"
 ```
 
-Be sure to reload your startup script after making changes (`source ~/.bash_profile` or equivelant).
+If they're not found, it'll try to load them from `~/.bigcli/.env`. If they're still found, it'll attempt to load them from your system's environment. If they're still not found, you'll be prompted to enter credentials. 
 
 ### Examples
 

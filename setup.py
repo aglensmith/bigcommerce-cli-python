@@ -16,7 +16,9 @@ setup(
         ],
     },
     packages=find_packages(),
-    install_requires=['bigcommerce @ git+https://github.com/aglensmith/bigcommerce-api-python.git@bigcli#egg=bigcommerce'],
+    install_requires=[
+        'bigcommerce @ git+https://github.com/aglensmith/bigcommerce-api-python.git@bigcli#egg=bigcommerce',
+        'python-dotenv'],
     url='https://github.com/aglensmith/bigcommerce-cli-python',
     author='Austin Smith',
     description='A CLI tool for BigCommerce',

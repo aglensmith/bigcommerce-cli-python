@@ -1,6 +1,7 @@
 import inspect, sys, os, platform, argparse, json, getpass, subprocess, csv
 import webbrowser
 import bigcommerce
+from dotenv import dotenv_values
 from pathlib import Path
 from bigcommerce.api import BigcommerceApi
 from bigcommerce.resources.base import *
@@ -14,6 +15,7 @@ Author: Austin Smith
 """
 
 def main():
+    v = dotenv_values(dotenv_path=os.path.join(os.getcwd(), '.env'))
     parser = get_parser()
     args = parser.parse_args()
     args.func(args, parser)
@@ -109,8 +111,14 @@ def api(args, parser):
     hash = get_store_hash(args)
     token = get_auth_token(args)
     client = BigcommerceApi(store_hash=hash, access_token=token, version='latest')
-    out_data = do_api_request(client, args.resource, args.method, args.ids, in_data)
-    output(args, out_data, hash)
+    try:
+        out_data = do_api_request(client, args.resource, args.method, args.ids, in_data)
+        output(args, out_data, hash)
+    except bigcommerce.exception.ClientRequestException as e:
+        print('bigcommerce.exception.ClientRequestException:\n')
+        print(e)
+        if 'response' in vars(e) and 'url' in vars(e.response):
+            print('\nFull URL: ' + e.response.url + '\n')     
 
 def files(args, parser): 
     if args.o and tmp_path_exists():
@@ -396,16 +404,34 @@ def init_api_client(args):
     token = get_auth_token(args)
     return BigcommerceApi(store_hash=hash, access_token=token, version='latest')
 
+def get_cwd_dot_env_value_for(var):
+    values = dotenv_values(dotenv_path=os.path.join(os.getcwd(), '.env'))
+    if var in values:
+        return values[var]
+
+def get_tmp_dir_env_value_for(var):
+    values = dotenv_values(dotenv_path=os.path.join(tmp_path(), '.env'))
+    if var in values:
+        return values[var]
+
 def get_store_hash(args):
     if args.prompt_for_creds:
         store_hash = input('Store Hash:')
     elif args.use_production:
-        store_hash = os.environ.get("BIGCLI_STORE_HASH_PROD")
-        if not store_hash or len(store_hash) < 3:
+        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_PROD')
+        if not store_hash:
+            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_PROD')
+        if not store_hash:
+            store_hash = os.environ.get("BIGCLI_STORE_HASH_PROD")
+        if not store_hash or len(store_hash) < 4:
             store_hash = getpass.getpass(prompt='[bigcli] Enter Store Hash:')
     else:
-        store_hash = os.environ.get("BIGCLI_STORE_HASH_DEV")
-        if not store_hash or len(store_hash) < 3:
+        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_DEV')
+        if not store_hash:
+            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_DEV')
+        if not store_hash:
+            store_hash = os.environ.get("BIGCLI_STORE_HASH_DEV")
+        if not store_hash or len(store_hash) < 4:
             store_hash = getpass.getpass(prompt='[bigcli] Enter Store Hash:')
     return store_hash
 
@@ -413,11 +439,20 @@ def get_auth_token(args):
     if args.prompt_for_creds:
         access_token = input('X-Auth-Token:')
     elif args.use_production:
-        access_token = os.environ.get("BIGCLI_AUTH_TOKEN_PROD")
+        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_PROD')
+        if not access_token:
+            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_PROD')
+        if not access_token:
+            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_PROD")
         if not access_token or len(access_token) < 10:
             print('\n[bigcli] BIGCLI_AUTH_TOKEN_PROD envar not found or invalid.')
             access_token = getpass.getpass(prompt='[bigcli] Enter X-Auth-Token:')
     else:
+        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
+        if not access_token:
+            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
+        if not access_token:
+            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_DEV")
         access_token = os.environ.get("BIGCLI_AUTH_TOKEN_DEV")
         if not access_token or len(access_token) < 10:
             print('\n[bigcli] BIGCLI_AUTH_TOKEN_DEV envar not found or invalid.')
