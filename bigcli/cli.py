@@ -1,7 +1,8 @@
-import inspect, sys, os, platform, argparse, json, getpass, subprocess, csv
-import webbrowser
+import inspect, sys, os, platform, argparse, json, getpass, subprocess, csv, time
+from operator import indexOf
 import bigcommerce
 from dotenv import dotenv_values
+import threading
 from pathlib import Path
 from bigcommerce.api import BigcommerceApi
 from bigcommerce.resources.base import *
@@ -15,7 +16,6 @@ Author: Austin Smith
 """
 
 def main():
-    v = dotenv_values(dotenv_path=os.path.join(os.getcwd(), '.env'))
     parser = get_parser()
     args = parser.parse_args()
     args.func(args, parser)
@@ -58,7 +58,6 @@ def get_parser():
     out_group.add_argument('-o', dest='out', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help=out_help)
     out_group.add_argument('-a', dest='attr', metavar='attribute', help=attr_help)
 
-
     cred_group = _shr.add_argument_group('credentials options')
     cred_group.add_argument('-c', '--creds', dest='prompt_for_creds', action='store_true', help=creds_help)
     cred_group.add_argument('-P', '--PROD', dest='use_production', action='store_true', help=prod_help)
@@ -73,7 +72,6 @@ def get_parser():
 
     _api.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
 
-
     # api only arguments
     req_group = _api.add_argument_group('request')
     req_group.add_argument('resource', nargs='?', metavar='resource', choices=resources, help=resource_help)
@@ -85,6 +83,7 @@ def get_parser():
 
     # task only arguments
     _tsk.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
+    _tsk.add_argument('-D', '--dry-run', dest='dry', action='store_true')
     _tsk.add_argument('task', nargs='?',  choices=Tasks._all())
     _tsk.add_argument('params', nargs='*')
     return __parser
@@ -108,12 +107,9 @@ def api(args, parser):
         return parser.parse_args(['api', '--help'])    
     if not validate_ids(Resources.all_dict[args.resource], args.resource, args.ids):
         return
-    hash = get_store_hash(args)
-    token = get_auth_token(args)
-    client = BigcommerceApi(store_hash=hash, access_token=token, version='latest')
     try:
-        out_data = do_api_request(client, args.resource, args.method, args.ids, in_data)
-        output(args, out_data, hash)
+        out_data = do_api_request(args, args.resource, args.method, args.ids, in_data)
+        output(args, out_data, hash=get_store_hash(args, prompt=False))
     except bigcommerce.exception.ClientRequestException as e:
         print('bigcommerce.exception.ClientRequestException:\n')
         print(e)
@@ -136,14 +132,15 @@ def tasks(args, parser):
     token = get_auth_token(args)
     client = BigcommerceApi(store_hash=hash, access_token=token, version='latest')
     out_data = Tasks._all()[args.task](args, client)
-    output(args, out_data, hash)
+    if out_data:
+        output(args, out_data, hash)
 
 # Tasks #######################################################################
 class Tasks():
 
     def _all():
         return {k:v for k,v in vars(Tasks).items() if not k.startswith('_')}
-
+    
     def get_all_category_ids(args, api):
         """
         list all category IDs
@@ -152,18 +149,27 @@ class Tasks():
         category_ids = [c.id for c in categories]
         return category_ids
 
-    def non_existent_categories(args, api):
+    def fix_product_cats(args, api):
         """
-        list deleted category IDs assigned to products
+        Removes deleted category IDs in the categories array of all products.
         """
-        categories = Tasks.get_all_category_ids(api)
-        non_existent = []
-        products = api.Products.iterall()
-        for product in products:
-            for catid in product.categories:
-                if catid not in categories:
-                    non_existent.append(catid)
-        return non_existent
+        all_cat_ids = Tasks.get_all_category_ids(args, api)
+        products_updated = []
+        deleted_cat_ids = []
+        i = 1
+        for p in api.Products.iterall():
+            new_p_cats = [c for c in p.categories] 
+            for catid in p.categories:
+                if catid not in all_cat_ids:
+                    deleted_cat_ids.append(catid)           
+                    new_p_cats.remove(catid)
+            if len(p.categories) > len(new_p_cats):
+                products_updated.append({p.id: {'before': p.categories, 'after': new_p_cats}})
+                if not args.dry:
+                    p.update(categories=new_p_cats)
+            print_req_info("Products", p, i, f"Deleted cats found: {len(deleted_cat_ids)} in {len(products_updated)} products")
+            i += 1
+        return {'nonexistent_cats': deleted_cat_ids, 'products': products_updated}
 
     def map(args, api):
         """
@@ -171,14 +177,34 @@ class Tasks():
         Ex: bigcli t map Products id name
         """
         d = {}
-        all = getattr(api, args.params[0]).iterall()
-        AttributeError
-        for i in all:
+        resource = getattr(api, args.params[0])
+        cls = Resources.all_dict[args.params[0]]
+        if islistable(cls):
+            all = resource.iterall()
+            for i in all:
+                try:
+                    d[getattr(i, args.params[1])] = getattr(i, args.params[2])
+                except AttributeError:
+                    d[getattr(i, args.params[1])] ='[bigcli]: this obj has no ' + args.params[2]
+        else:
+            resource = resource.get()
             try:
-                d[getattr(i, args.params[1])] = getattr(i, args.params[2])
+                d[getattr(resource, args.params[1])] = getattr(resource, args.params[2])
             except AttributeError:
-                d[getattr(i, args.params[1])] ='[bigcli]: this obj has no ' + args.params[2]
+                d[getattr(resource, args.params[1])] ='[bigcli]: this obj has no ' + args.params[2]
         return d
+
+    def prop(args, api):
+        """
+        Get the value of a resource's property
+        Ex: bigcli t prop Categories 53 name
+        """
+        if len(args.params) < 3:
+            return
+        resource = getattr(api, args.params[0])
+        resource = resource.get(args.params[1])
+        attr = args.params[2]
+        return getattr(resource, attr)
     
     def widget_templates(args, api):
         """
@@ -215,8 +241,14 @@ class Tasks():
         return template.schema
 
 # Helpers #####################################################################
-def do_api_request(api, resource, method=None, ids=[], data=None, **params):
+def do_api_request(args, resource, method=None, ids=[], data=None, **params):
     """Uses CLI args to make api request and returns the response"""
+    hash = get_store_hash(args)
+    token = get_auth_token(args)
+    api = BigcommerceApi(store_hash=hash, access_token=token, version='latest',
+        rate_limiting_management= {'min_requests_remaining':2,
+                                    'wait':True,
+                                    'callback_function':None})
     resource_str = resource
     cls = Resources.all_dict[resource]
     resource = getattr(api, resource)
@@ -260,17 +292,12 @@ def do_api_request(api, resource, method=None, ids=[], data=None, **params):
 
 def output(args, obj, hash=None):
     """Writes obj to file or stdout depending on args"""
-
-    # make we obj is a dict
     if inspect.isgenerator(obj) or type(obj) is list:
         obj = iterall(obj)
     elif not inspect.isgenerator(obj) and issubclass(type(obj), ApiResource):
         obj = obj.__json__()
-
-    # we have a dict now, go ahead and serialize
     if args.pretty_print and (args.out is None or args.out.name != 'csv'):
         obj = json.dumps(obj, indent=4)
-
 
     # if -o, but no
     make_tmp_dirs_if_not_exist(hash)
@@ -295,6 +322,9 @@ def output(args, obj, hash=None):
     if args.out.name == 'csv':
         tocsv(obj, tmp_path() + '/' + filename + '.csv')
         return 
+
+    if type(obj) != str: 
+        obj = str(obj)
 
     args.out.write(obj)
 
@@ -363,6 +393,14 @@ def isroot(cls):
     if issubclass(cls, ApiResource):
         return True
 
+def islistable(cls):
+    if issubclass(cls, ListableApiResource):
+        return True
+    if issubclass(cls, ListableApiSubResource):
+        return True
+    if issubclass(cls, ListableApiSubSubResource):
+        return True
+
 def validate_ids(cls, resource_str, ids):
     error   = '\n[bigcli] ids are invalid. {} takes min {}, max {} ids.'
     example = '[bigcli] Ex: {} -i {{{}}} {{{}}} [id]\n'
@@ -395,6 +433,15 @@ def iterall(g):
     l = []
     for thing in g:
         if issubclass(type(thing), ApiResource):
+            print_req_info('Items', thing, len(l), f"Getting all {thing.resource_name}...")
+            thing = thing.__json__()
+        l.append(thing)
+    return l
+
+def iterall_threaded(g, l):
+    for thing in g:
+        if issubclass(type(thing), ApiResource):
+            print_req_info('Items', thing, len(l), f"Getting all {thing.resource_name}...")
             thing = thing.__json__()
         l.append(thing)
     return l
@@ -414,7 +461,7 @@ def get_tmp_dir_env_value_for(var):
     if var in values:
         return values[var]
 
-def get_store_hash(args):
+def get_store_hash(args, prompt=True):
     if args.prompt_for_creds:
         store_hash = input('Store Hash:')
     elif args.use_production:
@@ -431,11 +478,9 @@ def get_store_hash(args):
             store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_DEV')
         if not store_hash:
             store_hash = os.environ.get("BIGCLI_STORE_HASH_DEV")
-        if not store_hash or len(store_hash) < 4:
-            store_hash = getpass.getpass(prompt='[bigcli] Enter Store Hash:')
     return store_hash
 
-def get_auth_token(args):
+def get_auth_token(args, prompt=True):
     if args.prompt_for_creds:
         access_token = input('X-Auth-Token:')
     elif args.use_production:
@@ -444,19 +489,12 @@ def get_auth_token(args):
             access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_PROD')
         if not access_token:
             access_token = os.environ.get("BIGCLI_AUTH_TOKEN_PROD")
-        if not access_token or len(access_token) < 10:
-            print('\n[bigcli] BIGCLI_AUTH_TOKEN_PROD envar not found or invalid.')
-            access_token = getpass.getpass(prompt='[bigcli] Enter X-Auth-Token:')
     else:
         access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
         if not access_token:
             access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
         if not access_token:
             access_token = os.environ.get("BIGCLI_AUTH_TOKEN_DEV")
-        access_token = os.environ.get("BIGCLI_AUTH_TOKEN_DEV")
-        if not access_token or len(access_token) < 10:
-            print('\n[bigcli] BIGCLI_AUTH_TOKEN_DEV envar not found or invalid.')
-            access_token = getpass.getpass(prompt='[bigcli] Enter X-Auth-Token:')
     return access_token
 
 def tocsv(dict_list, filename):
@@ -472,6 +510,24 @@ def tocsv(dict_list, filename):
 def color(text, option):
     return { "red": '\033[95m', "blue": '\033[94m',"green": '\033[92m', 
     "yellow": '\033[93m', "red": '\033[91m'}[option] + text + '\033[0m'
+
+def print_req_info(resource_str, resource, i=None, row=None):
+    meta = resource._connection._last_response.json()['meta']
+    rl = resource._connection.rate_limit
+    """For printing request and rate limit info when iterative over API resources"""
+    flush_print_rows([
+        row,
+        f"Requests remaining: {rl['requests_remaining']} / {rl['requests_quota']}",
+        f"Ms until reset:     {rl['ms_until_reset']}",
+        f"{resource_str} scanned:   {i} / {meta['pagination']['total']}"
+    ])
+
+def flush_print_rows(rows):
+    cursor_up = '\x1b[1A'
+    for r in rows:
+        print(r, sep='', end='\n', flush=True)
+    print(cursor_up*(len(rows)+1))
+
 
 class Resources():
 
