@@ -512,6 +512,8 @@ def color(text, option):
     "yellow": '\033[93m', "red": '\033[91m'}[option] + text + '\033[0m'
 
 def print_req_info(resource_str, resource, i=None, row=None):
+    if 'meta' not in resource._connection._last_response.json():
+        return
     meta = resource._connection._last_response.json()['meta']
     rl = resource._connection.rate_limit
     """For printing request and rate limit info when iterative over API resources"""
