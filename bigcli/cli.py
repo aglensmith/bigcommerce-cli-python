@@ -1,18 +1,15 @@
-import inspect, sys, os, platform, argparse, json, getpass, subprocess, csv, time
-from operator import indexOf
+import inspect, sys, os, platform, argparse, json, getpass, csv
 import bigcommerce
 from dotenv import dotenv_values
-import threading
 from pathlib import Path
 from bigcommerce.api import BigcommerceApi
 from bigcommerce.resources.base import *
-from collections import OrderedDict
 from inspect import isclass
 
 """
-bigcli - A CLI tool for BigCommerce.
+bigcli - Interact with BigCommerce stores via command line.
 
-Author: Austin Smith
+Author: https://github.com/aglensmith
 """
 
 def main():
@@ -23,14 +20,13 @@ def main():
 # Argument parsers ############################################################
 def get_parser():
     prog             = 'bigcli'
-    desc             = 'A BigCommerce CLI tool'
+    desc             = 'Interact with BigCommerce stores via command line'
     epi              = 'See README.md for additional usage instructions'
     api_help         = 'make API requests'
-    tasks_help       = 'run pre-programmed tasks'
+    tasks_help       = 'run miscellaneous pre-programmed tasks'
     file_help        = 'list .bigcli files'
     resource_help    = 'An API resource (run bigcli a -l to see all)'
     ids_help         = 'specify resource IDs for path'
-    prod_help        = 'use production credential env vars'
     creds_help       = 'get prompted for api credentials'
     list_help        = 'list available api resources'
     pretty_help      = 'minify json output'
@@ -38,9 +34,12 @@ def get_parser():
     in_help          = 'specify file path to request body json'
     method_help      = 'get, all, update, or delete'
     data_help        = 'include json data for request body'
-    attr_help        = 'specify a single resource attribute to'
-    methods          = ['get', 'all', 'delete', 'create', 'update']
+    methods          = ['get', 'all', 'iterall', 'delete', 'create', 'update']
     fil_o_help       = 'open all .bigcli files'
+    widgets_help     = 'interact with store widgets'
+    themes_help      = 'interact with store themes'
+    settings_help    = 'interact with store settings'
+    env_help         = 'create or open ~/.bigcli/.env'
     resources        = Resources.all
 
     __parser   = argparse.ArgumentParser(prog=prog, description=desc, epilog=epi)
@@ -48,27 +47,47 @@ def get_parser():
 
     # shared arguments
     _shr = argparse.ArgumentParser(add_help=False)
+    _subs = argparse.ArgumentParser(add_help=False)
     
+    # input options
     in_group = _shr.add_argument_group('input options')
     in_group.add_argument('-d', dest='data', help=data_help)
     in_group.add_argument('-in', dest='instream', metavar='path', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help=in_help)
-    
+    in_group.add_argument('-p', dest='params', metavar='params', nargs='*', default=[], help=ids_help)
+
+    # output options
     out_group = _shr.add_argument_group('output options')
     out_group.add_argument('-m', '--minify', dest='pretty_print', action='store_false', help=pretty_help)
     out_group.add_argument('-o', dest='out', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help=out_help)
-    out_group.add_argument('-a', dest='attr', metavar='attribute', help=attr_help)
 
+    # credentials options
     cred_group = _shr.add_argument_group('credentials options')
     cred_group.add_argument('-c', '--creds', dest='prompt_for_creds', action='store_true', help=creds_help)
-    cred_group.add_argument('-P', '--PROD', dest='use_production', action='store_true', help=prod_help)
+    cred_group.add_argument('-e', dest='env', metavar='SUFFIX', default='dev', help='specify .env suffix (ex: PROD)')
 
+    # task only arguments
+    tsk_group = _subs.add_argument_group('task options')
+    tsk_group.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
+    tsk_group.add_argument('-D', '--dry-run', dest='dry', action='store_true')
+
+    # TODO: refactor - dynamically create
     subs = __parser.add_subparsers(title='Commands')
     _api = subs.add_parser('api',   aliases=['a'], help=api_help,   parents=[_shr])
-    _tsk = subs.add_parser('task',  aliases=['t'], help=tasks_help, parents=[_shr])
+    _env = subs.add_parser('env',   aliases=['e'], help=env_help,   parents=[])
     _fil = subs.add_parser('files', aliases=['f'], help=file_help, parents=[])
+    _set = subs.add_parser('settings', aliases=['s'], help=settings_help, parents=[_shr, _subs])
+    _tsk = subs.add_parser('task',  aliases=['t'], help=tasks_help, parents=[_shr, _subs])
+    _thm = subs.add_parser('themes', aliases=['th'], help=themes_help, parents=[_shr, _subs])
+    _wdg = subs.add_parser('widgets', aliases=['w'], help=widgets_help, parents=[_shr, _subs])
+
+    # default functions
+    _env.set_defaults(func=env)
     _api.set_defaults(func=api)
     _fil.set_defaults(func=files)
-    _tsk.set_defaults(func=tasks)
+    _set.set_defaults(func=Settings.default)
+    _tsk.set_defaults(func=Tasks.default)
+    _wdg.set_defaults(func=Widgets.default)
+    _thm.set_defaults(func=Themes.default)
 
     _api.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
 
@@ -78,14 +97,12 @@ def get_parser():
     req_group.add_argument('method', metavar='method', nargs='?', choices=methods, default='get', help=method_help)
     req_group.add_argument('-i', dest='ids', metavar='id', nargs='*', default=[], help=ids_help)
 
-    # file only orguments
+    # subcommand only orguments
     _fil.add_argument('-o', action='store_true', help=fil_o_help)
-
-    # task only arguments
-    _tsk.add_argument('-l', '--list', dest='list', help=list_help, action='store_true')
-    _tsk.add_argument('-D', '--dry-run', dest='dry', action='store_true')
     _tsk.add_argument('task', nargs='?',  choices=Tasks._all())
-    _tsk.add_argument('params', nargs='*')
+    _wdg.add_argument('task', nargs='?',  choices=Widgets._all())
+    _set.add_argument('task', nargs='?',  choices=Settings._all())
+    _thm.add_argument('task', nargs='?',  choices=Themes._all())
     return __parser
 
 # Argument parser functions ###################################################
@@ -99,6 +116,8 @@ def api(args, parser):
         in_data = json.loads(args.data)
     else:
         in_data = {}
+        for p in args.params:
+            in_data[p.split('=')[0]] = tryParseInt(p.split('=')[1])
     if args.data and args.instream and not args.instream.isatty():
         in_data = json.load(args.instream)
     if not args.data and (args.instream and not args.instream.isatty()):
@@ -111,10 +130,16 @@ def api(args, parser):
         out_data = do_api_request(args, args.resource, args.method, args.ids, in_data)
         output(args, out_data, hash=get_store_hash(args, prompt=False))
     except bigcommerce.exception.ClientRequestException as e:
-        print('bigcommerce.exception.ClientRequestException:\n')
-        print(e)
-        if 'response' in vars(e) and 'url' in vars(e.response):
-            print('\nFull URL: ' + e.response.url + '\n')     
+        handleBigCommerceClientRequestException(e)
+
+def env(args, parser):
+    make_tmp_dirs_if_not_exist()
+    print(not os.path.exists(dot_env_path()))
+    if not os.path.exists(dot_env_path()):
+        with open(dot_env_path(), 'w') as f:
+            f.write('BIGCLI_STORE_HASH_DEV="hash"\n')
+            f.write('BIGCLI_AUTH_TOKEN_DEV="token"\n')
+    open_env()
 
 def files(args, parser): 
     if args.o and tmp_path_exists():
@@ -122,38 +147,106 @@ def files(args, parser):
     else:
         list_files()
 
-def tasks(args, parser):
-    if args.list:
-        for k,v in Tasks._all().items():
-            print(k)
-            print(v.__doc__)
-        return
-    hash = get_store_hash(args)
-    token = get_auth_token(args)
-    client = BigcommerceApi(store_hash=hash, access_token=token, version='latest')
-    out_data = Tasks._all()[args.task](args, client)
-    if out_data:
-        output(args, out_data, hash)
-
 # Tasks #######################################################################
-class Tasks():
+class SubCommand():
 
-    def _all():
-        return {k:v for k,v in vars(Tasks).items() if not k.startswith('_')}
+    @classmethod
+    def _all(cls):
+        return {k:v for k,v in vars(cls).items() if not k.startswith('_')}
+
+    @classmethod
+    def default(cls, args, parser):
+        if args.list:
+            for k,v in cls._all().items():
+                print("{} {} {}".format(color(k, 'blue'), " " * (30-len(k)), v.__doc__))
+            return
+        hash = get_store_hash(args)
+        token = get_auth_token(args)
+        client = BigcommerceApi(store_hash=hash, access_token=token, version='latest')
+        out_data = cls._all()[args.task](args, client)
+        if out_data:
+            output(args, out_data, hash)
+
+    @classmethod
+    def pretty_print_key_values(cls, d):
+        cls.print_rows(["{}{}{}".format(color(k, 'blue'), " " * (35-len(k)), v) for k, v in d.items() if not k.startswith('_')])
+
+    @classmethod
+    def print_rows(cls, rows):
+        for r in rows:
+            print(r)
+
+
+class Settings(SubCommand):
+
+    def all(args, api):
+        """list all store settings"""
+        settings = {}
+        for r in Resources.classes:
+            if r and "Settings" in r.__name__:
+                if isUpdateable(r) and not (islistable(r) or isCreatable(r)):
+                    print(r.__name__)
+                    Settings.pretty_print_key_values(getattr(api, r.__name__).get().__json__())
+                    settings.update(getattr(api, r.__name__).get().__json__())
+                    print("")
+
+    def logo(args, api):
+        """List logo settings"""
+        settings = api.SettingsLogo.get()
+        Settings.pretty_print_key_values(settings)
+
+    def profile(args, api):
+        """List logo settings"""
+        settings = api.SettingsStoreProfile.get()
+        Settings.pretty_print_key_values(settings)
+
+    def email_statuses(args, api):
+        """List email status settings"""
+        settings = api.SettingsEmailStatuses.get()
+        Settings.pretty_print_key_values(settings)
+
+
+class Themes(SubCommand):
+
+    def list(args, api):
+        """List themes"""
+        themes = api.Themes.all()
+        return {t['uuid']:t['name'] for t in themes}
+
+    def cleanup(args, api):
+        """delete all inactive themes"""
+        if confirm(api, 'themes'):
+            themes = api.Themes.all()
+            for t in themes:
+                if not t['is_active']:
+                    print('[brocli]: deleting theme {} {}'.format(t.name, t.uuid))
+                    try:
+                        t.delete()
+                    except bigcommerce.exception.ClientRequestException as e:
+                        handleBigCommerceClientRequestException(e)
+
+    def delete(args, api):
+        if len(args.params) < 1:
+            args.pretty_print = True
+            output(args, Themes.list(args, api))
+            uuid = input ('\n [bigcli] UUID: ')
+            args.params.append(uuid)
+
+        if confirm(api, uuid):
+            api.Themes.get(args.params[0]).delete()
+
+
+class Tasks(SubCommand):
     
-    def get_all_category_ids(args, api):
-        """
-        list all category IDs
-        """
+    def list_cat_ids(args, api):
+        """list all category IDs"""
         categories = api.Categories.iterall()
         category_ids = [c.id for c in categories]
         return category_ids
 
     def fix_product_cats(args, api):
-        """
-        Removes deleted category IDs in the categories array of all products.
-        """
-        all_cat_ids = Tasks.get_all_category_ids(args, api)
+        """Removes deleted category IDs in the categories array of all products."""
+        all_cat_ids = Tasks.list_cat_ids(args, api)
         products_updated = []
         deleted_cat_ids = []
         i = 1
@@ -171,74 +264,51 @@ class Tasks():
             i += 1
         return {'nonexistent_cats': deleted_cat_ids, 'products': products_updated}
 
-    def map(args, api):
-        """
-        list all of a {Resource} by {unique_attr}:{attr}
-        Ex: bigcli t map Products id name
-        """
-        d = {}
-        resource = getattr(api, args.params[0])
-        cls = Resources.all_dict[args.params[0]]
-        if islistable(cls):
-            all = resource.iterall()
-            for i in all:
-                try:
-                    d[getattr(i, args.params[1])] = getattr(i, args.params[2])
-                except AttributeError:
-                    d[getattr(i, args.params[1])] ='[bigcli]: this obj has no ' + args.params[2]
-        else:
-            resource = resource.get()
-            try:
-                d[getattr(resource, args.params[1])] = getattr(resource, args.params[2])
-            except AttributeError:
-                d[getattr(resource, args.params[1])] ='[bigcli]: this obj has no ' + args.params[2]
-        return d
 
-    def prop(args, api):
-        """
-        Get the value of a resource's property
-        Ex: bigcli t prop Categories 53 name
-        """
-        if len(args.params) < 3:
-            return
-        resource = getattr(api, args.params[0])
-        resource = resource.get(args.params[1])
-        attr = args.params[2]
-        return getattr(resource, attr)
+class Widgets(SubCommand):
     
-    def widget_templates(args, api):
-        """
-        list widget templates by [uuid], name
-        Ex: bigcli t widget_templates
-        """
+    def templates(args, api):
+        """list widget templates by [uuid], name | Ex: bigcli t widget_templates"""
         templates = api.WidgetTemplates.iterall()
         return {t['uuid']:t['name'] for t in templates}
 
-    def widget_template_html(args, api):
-        """
-        get a widget template's html by [uuid]
-        Ex: bigcli t widget_template_html 
-        """
-        if len(args.params) < 1:
-            args.pretty_print = True
-            output(args, Tasks.widget_templates(args, api))
-            uuid = input ('\n [bigcli] UUID: ')
-            args.params.append(uuid)
-        template = api.WidgetTemplates.get(args.params[0])
-        return template.template
+    def placements(args, api):
+        """list widget placements by [uuid], name | Ex: bigcli t widget_templates"""
+        placements = api.WidgetPlacements.iterall()
+        Widgets.print_rows(['{} {} {} {} {}'.format(p['uuid'], p['widget']['name'], p['channel_id'], p['region'], p['status']) for p in placements])
 
-    def widget_template_schema(args, api):
-        """
-        get a widget template's schema by [uuid]
-        Ex: bigcli t widget_template_schema [uuid]
-        """
-        if len(args.params) < 1:
-            args.pretty_print = True
-            output(args, Tasks.widget_templates(args, api))
-            uuid = input ('\n [bigcli] UUID: ')
-            args.params.append(uuid)
-        template = api.WidgetTemplates.get(args.params[0])
-        return template.schema
+    def regions(args, api):
+        """list all widget regions (or specify filenames) Ex: bigcli widgets regions pages/home"""
+        templates = [
+            'pages/blog-post',
+            'pages/blog',
+            'pages/brand',
+            'pages/brands',
+            'pages/cart',
+            'pages/category',
+            'pages/checkout',
+            'pages/compare',
+            'pages/contact-us',
+            'pages/home',
+            'pages/order-confirmation',
+            'pages/page',
+            'pages/product',
+            'pages/search',
+            'pages/sitemap',
+            'pages/subscribed',
+            'pages/unsubscribe'
+        ]
+        if len(args.params) > 0:
+            templates = args.params
+        regions = {}
+        for t in templates:
+            regions[t] = [r.name for r in api.WidgetRegions.all(template_file=t) if 'name' in r]
+        for k,v in regions.items():
+            print(k)
+            for i in v:
+                print('  {}'.format(i))
+            print('')
+
 
 # Helpers #####################################################################
 def do_api_request(args, resource, method=None, ids=[], data=None, **params):
@@ -252,23 +322,33 @@ def do_api_request(args, resource, method=None, ids=[], data=None, **params):
     resource_str = resource
     cls = Resources.all_dict[resource]
     resource = getattr(api, resource)
-    
-    if method == 'all':
-        method = 'iterall'
-
     if not validate_ids(cls, resource_str, ids):
         return
-
+    if method == 'create':
+        if method and len(ids) == 0:
+            return getattr(resource, method)(**data)
+        if method and len(ids) == 1:
+            if type(data) == list:
+                return getattr(resource, method)(ids[0], data)
+            return getattr(resource, method)(ids[0], **data)
+        if method and len(ids) == 2:
+            return getattr(resource, method)(ids[0], ids[1], **data)
+        if method and len(ids) == 3:
+            return getattr(resource, method)(ids[0], ids[1], ids[2], **data)
     if method == 'update':
         if method and len(ids) == 0:
-            return getattr(resource, 'get')().update(**data)
+            print('update...')
+            if isUpsertable(cls) and type(data) != list:
+                data = [data]
+            print(data)
+            return resource.update(data)
         if method and len(ids) == 1:
             return getattr(resource, 'get')(ids[0]).update(**data)
         if method and len(ids) == 2:
             return getattr(resource, 'get')(ids[0], ids[1]).update(**data)
         if method and len(ids) == 3:
             return getattr(resource, 'get')(ids[0], ids[1], ids[2]).update(**data)
-    if method != 'delete':
+    if method == 'all' or method == 'iterall' or method == 'get':
         if method and len(ids) == 0:
             return getattr(resource, method)(**data)
         if method and len(ids) == 1:
@@ -279,10 +359,9 @@ def do_api_request(args, resource, method=None, ids=[], data=None, **params):
             return getattr(resource, method)(ids[0], ids[1], ids[2], **data)
     if method == 'delete':
         if not confirm(api, resource_str, ids):
-            print('\n[bigcli] Delete aborted.')
             return
         if method and len(ids) == 0:
-            return getattr(resource, 'get')().delete_all()
+            return resource.delete_all()
         if method and len(ids) == 1:
             return getattr(resource, 'get')(ids[0]).delete()
         if method and len(ids) == 2:
@@ -328,14 +407,23 @@ def output(args, obj, hash=None):
 
     args.out.write(obj)
 
+def handleBigCommerceClientRequestException(e):
+    print('bigcommerce.exception.ClientRequestException:\n')
+    print(e)
+    if 'response' in vars(e) and 'url' in vars(e.response):
+        print('\nFull URL: ' + e.response.url + '\n')  
+
+def dot_env_path():
+    return "{}{}{}".format(tmp_path(), "/", '.env')
+
 def tmp_path(hash=None):
     if hash:
         return tmp_path() + '/' + hash
     return str(Path.home()) + '/.bigcli'
 
-def make_tmp_dirs_if_not_exist(hash):
-    if not tmp_path_exists():
-        os.mkdir(tmp_path())
+def make_tmp_dirs_if_not_exist(hash=None):
+    if not tmp_path_exists(hash):
+        os.mkdir(tmp_path(hash))
 
 def tmp_path_exists(hash=None):
     if hash:
@@ -345,10 +433,13 @@ def tmp_path_exists(hash=None):
 def list_files():
     for file in os.listdir(tmp_path()):
         print("{}/{}".format(tmp_path(), file))
+        
+def open_env():
+    open_files_using_default_editor('.env')
 
-def open_files_using_default_editor():
+def open_files_using_default_editor(files='*'):
     editor = os.getenv('EDITOR')
-    path = tmp_path() + '/*'
+    path = "{}{}{}".format(tmp_path(), "/", files)
     if platform.system() == "Darwin": 
         os.system('open {}'.format(path))
     elif editor:
@@ -393,6 +484,18 @@ def isroot(cls):
     if issubclass(cls, ApiResource):
         return True
 
+def isUpsertable(cls):
+    if issubclass(cls, CollectionUpdateableApiResource):
+        return True
+
+def isCreatable(cls):
+    if issubclass(cls, CreateableApiResource):
+        return True
+
+def isUpdateable(cls):
+    if issubclass(cls, UpdateableApiResource):
+        return True
+
 def islistable(cls):
     if issubclass(cls, ListableApiResource):
         return True
@@ -400,6 +503,12 @@ def islistable(cls):
         return True
     if issubclass(cls, ListableApiSubSubResource):
         return True
+
+def tryParseInt(s, base=10, val=None):
+    try:
+        return int(s, base)
+    except ValueError:
+        return s 
 
 def validate_ids(cls, resource_str, ids):
     error   = '\n[bigcli] ids are invalid. {} takes min {}, max {} ids.'
@@ -417,28 +526,28 @@ def validate_ids(cls, resource_str, ids):
         return True
 
 def confirm(api, resource_str, ids=[]):
-        domain = color(api.Store.all().domain, 'blue')
+        domain = api.Store.get().domain
+        domainColor = color(domain, 'blue')
         action = color('DELETE', 'red')
         if len(ids) > 0:
             id = color(ids[-1], 'red')
-            print("\n{} {} {} on {}?".format(action, resource_str, id, domain))
+            print("\n[bigcli]: {} {} {} on {}?".format(action, resource_str, id, domainColor))
             check = 'delete it now'
-            return input("Type '{}': ".format(check)) == check
+            confirmed = input("[bigcli]: type '{}' to confirm: ".format(check)) == check
+            if not confirmed:
+                print('\n[bigcli]: Delete aborted.')
+            return confirmed
         else:
-            print("\n{} {} {} on {}?".format(action, 'ALL', resource_str, domain))
+            print("\n[bigcli]: {} {} {} on {}?".format(action, 'ALL', resource_str, domainColor))
             check = "delete all {} on {}".format(resource_str, domain)
-            return input("Type '{}': ".format(check)) == check
+            check = "{}".format(check)
+            confirmed = input("[bigcli]: type '{}' to confirm: ".format(check)) == check
+            if not confirmed:
+                print('[bigcli]: Delete aborted.\n')
+            return confirmed
 
 def iterall(g):
     l = []
-    for thing in g:
-        if issubclass(type(thing), ApiResource):
-            print_req_info('Items', thing, len(l), f"Getting all {thing.resource_name}...")
-            thing = thing.__json__()
-        l.append(thing)
-    return l
-
-def iterall_threaded(g, l):
     for thing in g:
         if issubclass(type(thing), ApiResource):
             print_req_info('Items', thing, len(l), f"Getting all {thing.resource_name}...")
@@ -464,37 +573,39 @@ def get_tmp_dir_env_value_for(var):
 def get_store_hash(args, prompt=True):
     if args.prompt_for_creds:
         store_hash = input('Store Hash:')
-    elif args.use_production:
-        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_PROD')
+    elif args.env:
+        s = args.env.upper()
+        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_{}'.format(s))
         if not store_hash:
-            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_PROD')
+            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_{}'.format(s))
         if not store_hash:
-            store_hash = os.environ.get("BIGCLI_STORE_HASH_PROD")
+            store_hash = os.environ.get("BIGCLI_STORE_HASH_{}".format(s))
         if not store_hash or len(store_hash) < 4:
             store_hash = getpass.getpass(prompt='[bigcli] Enter Store Hash:')
     else:
-        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_DEV')
+        store_hash = get_cwd_dot_env_value_for('BIGCLI_STORE_HASH_{}'.format(s))
         if not store_hash:
-            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_DEV')
+            store_hash = get_tmp_dir_env_value_for('BIGCLI_STORE_HASH_{}'.format(s))
         if not store_hash:
-            store_hash = os.environ.get("BIGCLI_STORE_HASH_DEV")
+            store_hash = os.environ.get("BIGCLI_STORE_HASH_{}".format(s))
     return store_hash
 
 def get_auth_token(args, prompt=True):
     if args.prompt_for_creds:
         access_token = input('X-Auth-Token:')
-    elif args.use_production:
-        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_PROD')
+    elif args.env:
+        s = args.env.upper()
+        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_{}'.format(s))
         if not access_token:
-            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_PROD')
+            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_{}'.format(s))
         if not access_token:
-            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_PROD")
+            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_{}".format(s))
     else:
-        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
+        access_token = get_cwd_dot_env_value_for('BIGCLI_AUTH_TOKEN_{}'.format(s))
         if not access_token:
-            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_DEV')
+            access_token = get_tmp_dir_env_value_for('BIGCLI_AUTH_TOKEN_{}'.format(s))
         if not access_token:
-            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_DEV")
+            access_token = os.environ.get("BIGCLI_AUTH_TOKEN_{}".format(s))
     return access_token
 
 def tocsv(dict_list, filename):
@@ -512,17 +623,24 @@ def color(text, option):
     "yellow": '\033[93m', "red": '\033[91m'}[option] + text + '\033[0m'
 
 def print_req_info(resource_str, resource, i=None, row=None):
-    if 'meta' not in resource._connection._last_response.json():
-        return
-    meta = resource._connection._last_response.json()['meta']
-    rl = resource._connection.rate_limit
-    """For printing request and rate limit info when iterative over API resources"""
-    flush_print_rows([
-        row,
-        f"Requests remaining: {rl['requests_remaining']} / {rl['requests_quota']}",
-        f"Ms until reset:     {rl['ms_until_reset']}",
-        f"{resource_str} scanned:   {i} / {meta['pagination']['total']}"
-    ])
+    """For printing request and rate limit info when iterating over API resources"""
+    if resource.resource_version == 'v3':
+        try:
+            meta = resource._connection._last_response.json()['meta']
+            total = meta['pagination']['total']
+            if total > 0 and total / 250 > 0:
+                return
+            rl = resource._connection.rate_limit
+            flush_print_rows([
+                row,
+                f"Requests remaining: {rl['requests_remaining']} / {rl['requests_quota']}",
+                f"Ms until reset:     {rl['ms_until_reset']}",
+                f"{resource_str} scanned:   {i} / {meta['pagination']['total']}"
+            ])
+        except KeyError:
+            return
+        except TypeError:
+            return
 
 def flush_print_rows(rows):
     cursor_up = '\x1b[1A'
@@ -530,16 +648,20 @@ def flush_print_rows(rows):
         print(r, sep='', end='\n', flush=True)
     print(cursor_up*(len(rows)+1))
 
-
 class Resources():
 
     def map_resources(all, type=ApiResource):
         l = [k for k,v in all.items() if isclass(v) and issubclass(v, type)]
         return [i for i in l if not i.startswith("_") and 'Resource' not in i and 'Mapping' not in i]
 
+    def map_classes(all, type=ApiResource):
+        l = [v for k,v in all.items() if isclass(v) and issubclass(v, type)]
+        return [i for i in l if not i.__name__.startswith("_") and 'Resource' not in i.__name__ and 'Mapping' not in i.__name__]
+
     all = vars(bigcommerce.bigcommerce.resources.v2)
     all.update(vars(bigcommerce.bigcommerce.resources.v3))
     all_dict = all
+    classes = map_classes(all, ApiResource)
     all = map_resources(all, ApiResource)
     all.sort()
 
